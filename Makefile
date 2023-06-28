@@ -12,8 +12,8 @@ BUILD_DIR := build/bin
 export CVL_SCHEMA_PATH := $(MGMT_COMMON_DIR)/build/cvl/schema
 export GOBIN := $(abspath $(BUILD_DIR))
 export PATH := $(PATH):$(GOBIN):$(shell dirname $(GO))
-export CGO_LDFLAGS := -lswsscommon -lhiredis
-export CGO_CXXFLAGS := -I/usr/include/swss -w -Wall -fpermissive
+export CGO_LDFLAGS := $(CGO_LDFLAGS) -lswsscommon -lhiredis
+export CGO_CXXFLAGS := $(CGO_CXXFLAGS) -I/usr/include/swss -Wall -fpermissive
 
 SRC_FILES=$(shell find . -name '*.go' | grep -v '_test.go' | grep -v '/tests/')
 TEST_FILES=$(wildcard *_test.go)
@@ -60,6 +60,22 @@ go-deps: $(GO_DEPS)
 go-deps-clean:
 	$(RM) -r vendor
 
+
+define build_golang
+	@ # Taken from https://gitlab.com/gitlab-org/gitaly/-/merge_requests/4192
+	@ #
+	@ # To compute a unique and deterministic value for GNU build-id, we build the Go binary a second time.
+	@ # From the first build, we extract its unique and deterministic Go build-id, and use that to derive
+	@ # comparably unique and deterministic GNU build-id to inject into the final binary.
+	@ # If we cannot extract a Go build-id, we punt and fallback to using a random 32-byte hex string.
+	@ # This fallback is unique but non-deterministic, making it sufficient to avoid generating the
+	@ # GNU build-id from the empty string and causing guaranteed collisions.
+	$(GO) install -trimpath -mod=vendor $2 $1
+	GO_BUILD_ID=$$( $(GO) tool buildid ${GOBIN}/$(notdir $1) || openssl rand -hex 32 ) && \
+	GNU_BUILD_ID=$$( echo $$GO_BUILD_ID | sha1sum | cut -d' ' -f1 ) && \
+	$(GO) install -trimpath -ldflags "-B 0x$$GNU_BUILD_ID" -mod vendor $1
+endef
+
 sonic-gnmi: $(GO_DEPS)
 ifeq ($(CROSS_BUILD_ENVIRON),y)
 	$(GO) build -o ${GOBIN}/telemetry -mod=vendor $(BLD_FLAGS) github.com/sonic-net/sonic-gnmi/telemetry
@@ -70,13 +86,13 @@ ifeq ($(CROSS_BUILD_ENVIRON),y)
 	$(GO) build -o ${GOBIN}/gnoi_client -mod=vendor github.com/sonic-net/sonic-gnmi/gnoi_client
 	$(GO) build -o ${GOBIN}/gnmi_dump -mod=vendor github.com/sonic-net/sonic-gnmi/gnmi_dump
 else
-	$(GO) install -mod=vendor $(BLD_FLAGS) github.com/sonic-net/sonic-gnmi/telemetry
-	$(GO) install -mod=vendor $(BLD_FLAGS) github.com/sonic-net/sonic-gnmi/dialout/dialout_client_cli
-	$(GO) install -mod=vendor github.com/jipanyang/gnxi/gnmi_get
-	$(GO) install -mod=vendor github.com/jipanyang/gnxi/gnmi_set
-	$(GO) install -mod=vendor github.com/openconfig/gnmi/cmd/gnmi_cli
-	$(GO) install -mod=vendor github.com/sonic-net/sonic-gnmi/gnoi_client
-	$(GO) install -mod=vendor github.com/sonic-net/sonic-gnmi/gnmi_dump
+	$(call build_golang,github.com/sonic-net/sonic-gnmi/telemetry,$(BLD_FLAGS))
+	$(call build_golang,github.com/sonic-net/sonic-gnmi/dialout/dialout_client_cli,$(BLD_FLAGS))
+	$(call build_golang,github.com/jipanyang/gnxi/gnmi_get,)
+	$(call build_golang,github.com/jipanyang/gnxi/gnmi_set,)
+	$(call build_golang,github.com/openconfig/gnmi/cmd/gnmi_cli)
+	$(call build_golang,github.com/sonic-net/sonic-gnmi/gnoi_client)
+	$(call build_golang,github.com/sonic-net/sonic-gnmi/gnmi_dump)
 endif
 
 swsscommon_wrap:
